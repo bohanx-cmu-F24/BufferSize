@@ -1,8 +1,18 @@
 import asyncio
 import os
 from autogen_ext.models.openai import OpenAIChatCompletionClient
+from autogen_agentchat.agents import AssistantAgent
+
 from dotenv import load_dotenv
 from autogen_core.models import UserMessage
+
+from Boundary.chatReceiver import ChatReceiver
+from Boundary.moonshot import KimiStaticTesting
+
+from autogen_agentchat.messages import TextMessage
+from autogen_agentchat.ui import Console
+from autogen_core import CancellationToken
+
 
 load_dotenv()
 
@@ -16,11 +26,27 @@ openai_model_client = OpenAIChatCompletionClient(
         "json_output": False,
     },
 )
+class Agent:
+    def __init__(self, chatReceiver: ChatReceiver):
+        self.chatReceiver = chatReceiver
+        self.agent = AssistantAgent(
+                    name="assistant",
+                    model_client=self.chatReceiver.client,
+                    tools=[],
+                    system_message=self.chatReceiver.system_prompt
+                )
 
+    async def send_message(self, message):
+        print("Loading...")
+        response = await self.agent.on_messages(
+            [TextMessage(content=message, source="user")],
+            cancellation_token=CancellationToken(),
+        )
+        print(response.chat_message.content)
 
 
 if __name__ == '__main__':
-    async def trytry():
-        result = await openai_model_client.create([UserMessage(content="What is the capital of France?", source="user")])
-        print(result)
-    asyncio.run(trytry())
+    myAgent = Agent(KimiStaticTesting)
+    while True:
+        userInput = input()
+        asyncio.run(myAgent.send_message(userInput))
