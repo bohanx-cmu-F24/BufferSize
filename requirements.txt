@@ -1,1 +1,7 @@
 pytorch
+flask
+flask-cors
+pymongo
+bcrypt
+python-dotenv
+werkzeug

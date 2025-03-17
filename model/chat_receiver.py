@@ -28,7 +28,8 @@ class ChatReceiver(ABC):
                       model_name: str,
                       use_vision = False,
                       use_function_call = True,
-                      use_json = False):
+                      use_json = False,
+                        ):
 
         self.client = OpenAIChatCompletionClient(
             model=model_name,
@@ -39,6 +40,7 @@ class ChatReceiver(ABC):
                 "function_calling": use_function_call,
                 "json_output": use_json,
             },
+            max_tokens=4096
         )
 
     # def get_model_param(self,key):
