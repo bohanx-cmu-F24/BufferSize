@@ -1,3 +1,4 @@
+import time
 from http.client import responses
 import os
 import datetime
@@ -267,7 +268,8 @@ async def run_schedule_analysis(make_schedule=False, username=None, force_refres
     
     # Extract tasks from the analysis response
     response_parsed = json.dumps(extract_tasks(analysis_response))
-    
+
+    time.sleep(2)
     # Generate the schedule
     schedule_response = await planAgent.send_message(intro + response_parsed + bring_in + schedule_text)
     print(schedule_response)

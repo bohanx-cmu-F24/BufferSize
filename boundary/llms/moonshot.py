@@ -20,7 +20,7 @@ class moonshotChatReceiver(ChatReceiver):
             api_key = os.getenv("MOONSHOT_API_KEY")
         if base_url is None:
             base_url = os.getenv("MOONSHOT_URL")
-        super().__init__(api_key,base_url, "moonshot-v1-8k",
+        super().__init__(api_key,base_url, "moonshot-v1-32k",
                          system_prompt=system_prompt,
                          temperature= temperature,use_json=use_json,use_vision=use_vision,use_function_call=use_function_call)
 
