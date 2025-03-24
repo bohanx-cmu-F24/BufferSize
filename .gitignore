@@ -169,3 +169,46 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Secrets directory
+secrets/
+*.json
+token.json
+!package.json
+!package-lock.json
+
+# Uploads directory
+uploads/
+
+# Additional environment files
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Virtual environment
+.python-version
+
+# Local development settings
+local_settings.py
+
+# JetBrains IDE files
+*.xml
+*.iml

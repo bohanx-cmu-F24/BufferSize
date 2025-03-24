@@ -1,22 +1,27 @@
-import asyncio
 import os
 import flask
-from flask import request, jsonify
-from werkzeug.utils import secure_filename
 from flask_cors import CORS
-import pymongo
 from pymongo import MongoClient
-from bson.objectid import ObjectId
-import bcrypt
 from dotenv import load_dotenv
-from boundary.llms.moonshot import moonshotChatReceiver
-from controller.chat_service import run_schedule_analysis, mark_files_updated
-from util.text_extractor import json_extractor
-import datetime
-import json
+import bcrypt
+
+# Import route blueprints
+from routes.schedule_routes import schedule_bp
+from routes.file_routes import file_bp
+from routes.review_routes import review_bp
 
 # Load environment variables
 load_dotenv()
+
+# Setup secrets directory
+SECRETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'secrets')
+# Ensure the secrets directory exists
+if not os.path.exists(SECRETS_DIR):
+    os.makedirs(SECRETS_DIR)
+    print(f"Created secrets directory at {SECRETS_DIR}")
+
+# Make the secrets directory path available to other modules
+os.environ['SECRETS_DIR'] = SECRETS_DIR
 
 app = flask.Flask(__name__)
 CORS(app)
@@ -28,542 +33,127 @@ db = client.buffer_size_db
 users_collection = db.users
 courses_collection = db.courses
 
+# Configure app settings
 UPLOAD_FOLDER = './uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
-TYPE_OF_FILES = {"syllabus", "calendar"}
-
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 
+# Ensure upload folder exists
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+# Register blueprints
+app.register_blueprint(schedule_bp)
+app.register_blueprint(file_bp)
+app.register_blueprint(review_bp)
 
-def allowed_file(filename):
-    return '.' in filename and \
-        filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def get_user_courses(username):
-    user_courses = courses_collection.find_one({"username": username})
-    if user_courses:
-        return user_courses.get("courses", [])
-    else:
-        return []
-
-
-def add_user_course(username, course_id, course_name):
-    user_courses = get_user_courses(username)
-    if course_id in [course.get("course_id") for course in user_courses]:
-        return {"success": False, "error": "Course already exists"}
-    else:
-        user_courses.append({"course_id": course_id, "course_name": course_name})
-        courses_collection.update_one({"username": username}, {"$set": {"courses": user_courses}}, upsert=True)
-        return {"success": True, "message": "Course added successfully"}
-
-
-def delete_user_course(username, course_name):
-    user_courses = get_user_courses(username)
-    course_to_delete = next((course for course in user_courses if course.get("course_name") == course_name), None)
-    if course_to_delete:
-        user_courses.remove(course_to_delete)
-        courses_collection.update_one({"username": username}, {"$set": {"courses": user_courses}})
-        return {"success": True, "message": "Course deleted successfully"}
-    else:
-        return {"success": False, "error": "Course not found"}
-
-
-@app.route('/upload_file', methods=['POST'])
-async def upload_pdf():
-    try:
-        # Get user information from headers
-        token = request.headers.get('x-application-token')
-        user_id = request.headers.get('x-application-uid')
-        username = request.headers.get('x-application-username')
-        
-        # Get course_id from request body or query parameters
-        data = request.form.to_dict()
-        course_id = data.get('course_id') or request.args.get('course_id')
-        
-        print(f"POST /upload_file - username: {username}, course_id: {course_id}, files: {list(request.files.keys())}")
-        
-        # Check for required parameters
-        if not course_id:
-            return jsonify({"error": "Course ID is required"}), 400
-        
-        # If username is not provided, use a default or anonymous user
-        if not username:
-            username = "anonymous"
-            print(f"No username provided, using '{username}' as default")
-        
-        # Check if the course exists for the user (skip for anonymous users)
-        if username != "anonymous":
-            user_courses = get_user_courses(username)
-            if not any(course.get("course_id") == course_id for course in user_courses):
-                print(f"Course {course_id} not found for user {username}")
-                # Instead of returning error, we'll create the course automatically
-                add_user_course(username, course_id, f"Course {course_id}")
-                print(f"Created course {course_id} for user {username}")
-        
-        # Check if any files were uploaded
-        if not request.files:
-            return jsonify({"error": "No files were uploaded"}), 400
-        
-        for item in request.files:
-            if item not in TYPE_OF_FILES:
-                print(f"Skipping unknown file type: {item}")
-                continue
-                
-            file = request.files[item]
-            if file and allowed_file(file.filename):
-                # Create user and course specific filename
-                filename = secure_filename(f"{item}_{username}_{course_id}.pdf")
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                file.save(file_path)
-                
-                print(f"Saved file: {filename}")
-                
-                # Mark files as updated in chat_service with username and course_id
-                mark_files_updated(username, course_id, file_type=item)
-                print(f"Marked {item} as updated for user {username} and course {course_id}")
-            else:
-                return jsonify({"error": f"Invalid file type for {item}"}), 400
-        
-        return jsonify({"message": "File uploaded successfully"}), 200
-    except Exception as e:
-        print(f"Error saving file: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"Failed to save file: {str(e)}"}), 500
-
-
-@app.route("/upload_file", methods=["GET"])
-def get_upload_file():
-    # Get user information from headers
-    token = request.headers.get('x-application-token')
-    user_id = request.headers.get('x-application-uid')
-    username = request.headers.get('x-application-username')
-    course_id = request.args.get('course_id')
-    
-    print(course_id)
-
-    if not username:
-        return jsonify({"error": "Username is required"}), 400
-    
-    # If course_id is provided, check files for that specific course
-    if course_id:
-        # Query based on username and course_id
-        query = {"username": username, "course_id": course_id}
-        user_data = users_collection.find_one(query)
-        
-        if user_data:
-            syllabus_exist = user_data.get("syllabus_updated", False)
-            calendar_exist = user_data.get("calendar_updated", False)
-            return jsonify({
-                "syllabus": syllabus_exist,
-                "calendar": calendar_exist,
-                "course_id": course_id
-            }), 200
-        else:
-            return jsonify({
-                "syllabus": False,
-                "calendar": False,
-                "course_id": course_id
-            }), 200
-    else:
-        # If no course_id provided, get all courses for the user and their file status
-        user_courses = get_user_courses(username)
-        course_files = []
-        
-        for course in user_courses:
-            course_id = course.get("course_id")
-            query = {"username": username, "course_id": course_id}
-            user_data = users_collection.find_one(query)
-            
-            if user_data:
-                course_files.append({
-                    "course_id": course_id,
-                    "course_name": course.get("course_name"),
-                    "syllabus": user_data.get("syllabus_updated", False),
-                    "calendar": user_data.get("calendar_updated", False)
-                })
-            else:
-                course_files.append({
-                    "course_id": course_id,
-                    "course_name": course.get("course_name"),
-                    "syllabus": False,
-                    "calendar": False
-                })
-        
-        return jsonify({"courses": course_files}), 200
-
-
-@app.route("/schedule", methods=["GET"])
-async def get_schedule():
-    try:
-        # Get user information from headers
-        token = request.headers.get('x-application-token')
-        user_id = request.headers.get('x-application-uid')
-        username = request.headers.get('x-application-username')
-        
-        # Get parameters
-        makeCalendar = request.args.get('make_calendar', 'false').lower() == 'true'
-        force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
-        course_id = request.args.get('course_id')
-        
-        if not username:
-            return jsonify({
-                "success": False,
-                "message": "Username is required"
-            }), 400
-            
-        if not course_id:
-           course_id = "undefined"
-        
-        # Call schedule analysis with course_id
-        if makeCalendar:
-            result = await run_schedule_analysis(makeCalendar, username, force_refresh, course_id)
-        else:
-            result = await run_schedule_analysis(make_schedule=False, username=username, force_refresh=force_refresh, course_id=course_id)
-        
-        # Check if result contains an error message
-        try:
-            result_json = json.loads(result)
-            if isinstance(result_json, dict) and "error" in result_json:
-                return jsonify({
-                    "success": False,
-                    "message": result_json["error"]
-                }), 400
-        except (json.JSONDecodeError, TypeError):
-            # Not a JSON with error, continue processing
-            pass
-        
-        # Check if result is already JSON or needs to be extracted
-        try:
-            # Try to parse as JSON first (in case it's already a JSON string)
-            parsed_result = json.loads(result)
-        except (json.JSONDecodeError, TypeError):
-            # If not valid JSON, extract it
-            parsed_result = json_extractor(result)
-            
-        print(parsed_result)
-
-        # Return the results
-        return jsonify({
-            "success": True,
-            "message": "Study schedule generated successfully",
-            "data": parsed_result
-        }), 200
-
-    except Exception as e:
-        print(f"Error generating schedule: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            "success": False,
-            "message": f"Failed to generate schedule: {str(e)}"
-        }), 500
-
-
-@app.route('/login', methods=['POST'])
+# Authentication routes
+@app.route("/login", methods=["POST"])
 def login():
-    """Login a user or create a new account if the user doesn't exist"""
+    """Login a user or create a new account if the user doesn't exist
+    
+    Request body should contain:
+    - username: Username for login
+    - password: Password for login
+    
+    Returns:
+        JSON response with user information and token
+    """
     try:
-        data = request.get_json()
+        data = flask.request.get_json()
         
-        if not data or 'username' not in data or 'password' not in data:
-            return jsonify({"error": "Username and password are required"}), 400
-            
-        username = data['username']
-        password = data['password']
+        if not data or not data.get("username") or not data.get("password"):
+            return flask.jsonify({"error": "Username and password are required"}), 400
+        
+        username = data["username"]
+        password = data["password"]
         
         # Check if user exists
         user = users_collection.find_one({"username": username})
         
         if user:
-            # User exists, verify password
-            if bcrypt.checkpw(password.encode('utf-8'), user['password']):
-                # Password matches
-                return jsonify({
+            # Verify password
+            if bcrypt.checkpw(password.encode('utf-8'), user["password"]):
+                return flask.jsonify({
                     "message": "Login successful",
-                    "user_id": str(user["_id"]),
-                    "username": user["username"]
+                    "user": {
+                        "id": str(user["_id"]),
+                        "username": user["username"]
+                    },
+                    "token": "dummy-token"
                 }), 200
             else:
-                # Password doesn't match
-                return jsonify({"error": "Invalid password"}), 401
+                return flask.jsonify({"error": "Invalid password"}), 401
         else:
-            # User doesn't exist, create a new account
+            # Create new user
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-            
             new_user = {
                 "username": username,
-                "password": hashed_password,
-                "created_at": datetime.datetime.utcnow()
+                "password": hashed_password
             }
-            
             result = users_collection.insert_one(new_user)
             
-            return jsonify({
-                "message": "New account created successfully",
-                "user_id": str(result.inserted_id),
-                "username": username
+            return flask.jsonify({
+                "message": "User created and logged in",
+                "user": {
+                    "id": str(result.inserted_id),
+                    "username": username
+                },
+                "token": "dummy-token"
             }), 201
-            
     except Exception as e:
-        print(f"Error logging in: {str(e)}")
+        print(f"Error during login: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        return flask.jsonify({"error": f"Login failed: {str(e)}"}), 500
 
-@app.route('/api/register', methods=['POST'])
+@app.route("/register", methods=["POST"])
 def register():
-    """Register a new user"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'username' not in data or 'password' not in data:
-            return jsonify({"error": "Username and password are required"}), 400
-            
-        username = data['username']
-        password = data['password']
-        
-        # Check if username already exists
-        existing_user = users_collection.find_one({"username": username})
-        if existing_user:
-            return jsonify({"error": "Username already exists"}), 409
-        
-        # Hash the password
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-        
-        # Create new user
-        new_user = {
-            "username": username,
-            "password": hashed_password,
-            "created_at": datetime.datetime.utcnow()
-        }
-        
-        result = users_collection.insert_one(new_user)
-        
-        return jsonify({
-            "message": "User registered successfully",
-            "user_id": str(result.inserted_id),
-            "username": username
-        }), 201
-        
-    except Exception as e:
-        print(f"Error registering user: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
-
-@app.route("/courses", methods=["GET"])
-def get_courses():
-    """Get all courses for the authenticated user
-    
-    Returns:
-        JSON response with list of courses
-    """
-    try:
-        # Get user information from headers
-        token = request.headers.get('x-application-token')
-        user_id = request.headers.get('x-application-uid')
-        username = request.headers.get('x-application-username')
-        
-        # Fallback to query parameters if username is not in headers
-        if not username and 'username' in request.args:
-            username = request.args.get('username')
-        
-        if not username:
-            response = jsonify({
-                "success": False,
-                "message": "Username is required in either headers or query parameters"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
-        
-        # Get courses for the user
-        courses = get_user_courses(username)
-        
-        response = jsonify({
-            "success": True,
-            "message": "Courses retrieved successfully",
-            "data": courses
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 200
-        
-    except Exception as e:
-        print(f"Error getting courses: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        response = jsonify({
-            "success": False,
-            "message": f"Failed to get courses: {str(e)}"
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
-
-@app.route("/courses", methods=["POST"])
-def add_course():
-    """Add a new course for the authenticated user
+    """Register a new user
     
     Request body should contain:
-    - course_id: ID of the course
-    - course_name: Name of the course
+    - username: Username for registration
+    - password: Password for registration
     
     Returns:
-        JSON response with result of the operation
+        JSON response with user information and token
     """
     try:
-        # Get user information from headers
-        token = request.headers.get('x-application-token')
-        user_id = request.headers.get('x-application-uid')
-        username = request.headers.get('x-application-username')
+        data = flask.request.get_json()
         
-        # Fallback to query parameters if username is not in headers
-        if not username and 'username' in request.args:
-            username = request.args.get('username')
+        if not data or not data.get("username") or not data.get("password"):
+            return flask.jsonify({"error": "Username and password are required"}), 400
         
-        if not username:
-            response = jsonify({
-                "success": False,
-                "message": "Username is required in either headers or query parameters"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
+        username = data["username"]
+        password = data["password"]
         
-        # Get course data from request body - handle both JSON and form data
-        data = None
+        # Check if user already exists
+        existing_user = users_collection.find_one({"username": username})
+        if existing_user:
+            return flask.jsonify({"error": "Username already exists"}), 409
         
-        # Try to get JSON data
-        if request.is_json:
-            data = request.get_json()
-        # If not JSON, try to get form data
-        elif request.form:
-            data = request.form.to_dict()
-        # If still no data, try to force parse JSON
-        elif request.data:
-            try:
-                data = json.loads(request.data)
-            except:
-                pass
-                
-        if not data:
-            response = jsonify({
-                "success": False,
-                "message": "Request body is required in either JSON or form format"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
+        # Create new user
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        new_user = {
+            "username": username,
+            "password": hashed_password
+        }
+        result = users_collection.insert_one(new_user)
         
-        course_id = data.get('course_id')
-        course_name = data.get('course_name')
-        
-        if not course_id or not course_name:
-            response = jsonify({
-                "success": False,
-                "message": "Course ID and course name are required"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
-        
-        # Add the course
-        result = add_user_course(username, course_id, course_name)
-        
-        if result.get("success"):
-            response = jsonify({
-                "success": True,
-                "message": result.get("message")
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 201
-        else:
-            response = jsonify({
-                "success": False,
-                "message": result.get("error")
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
-        
+        return flask.jsonify({
+            "message": "User registered successfully",
+            "user": {
+                "id": str(result.inserted_id),
+                "username": username
+            },
+            "token": "dummy-token"
+        }), 201
     except Exception as e:
-        print(f"Error adding course: {str(e)}")
+        print(f"Error during registration: {str(e)}")
         import traceback
         traceback.print_exc()
-        response = jsonify({
-            "success": False,
-            "message": f"Failed to add course: {str(e)}"
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
-
-@app.route("/courses/<course_name>", methods=["DELETE"])
-def delete_course(course_name):
-    """Delete a course for the authenticated user
-    
-    Args:
-        course_name: Name of the course to delete
-    
-    Returns:
-        JSON response with result of the operation
-    """
-    try:
-        # Get user information from headers
-        token = request.headers.get('x-application-token')
-        user_id = request.headers.get('x-application-uid')
-        username = request.headers.get('x-application-username')
-        
-        # Fallback to query parameters if username is not in headers
-        if not username and 'username' in request.args:
-            username = request.args.get('username')
-        
-        if not username:
-            response = jsonify({
-                "success": False,
-                "message": "Username is required in either headers or query parameters"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 400
-        
-        # Delete the course
-        result = delete_user_course(username, course_name)
-        
-        if result.get("success"):
-            response = jsonify({
-                "success": True,
-                "message": result.get("message")
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 200
-        else:
-            response = jsonify({
-                "success": False,
-                "message": result.get("error")
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 404
-        
-    except Exception as e:
-        print(f"Error deleting course: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        response = jsonify({
-            "success": False,
-            "message": f"Failed to delete course: {str(e)}"
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
-
-
-# Add OPTIONS method handler for CORS preflight requests
-@app.route("/courses", methods=["OPTIONS"])
-@app.route("/courses/<course_name>", methods=["OPTIONS"])
-def handle_options(course_name=None):
-    response = jsonify({})
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,x-application-token,x-application-uid,x-application-username')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS')
-    return response, 200
+        return flask.jsonify({"error": f"Registration failed: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(port=2817)

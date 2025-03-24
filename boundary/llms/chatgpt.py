@@ -1,48 +1,54 @@
-from autogen_core.models import UserMessage
-
 from model.chat_receiver import ChatReceiver
 from dotenv import load_dotenv
 import os
-import asyncio
+from autogen_ext.models.openai import OpenAIChatCompletionClient
 import json
-import re
 
 load_dotenv()
 
 
-class MoonshotChatReceiver(ChatReceiver):
-    def __init__(self, api_key = None, base_url = None,
-                 system_prompt = "",
-                 temperature = 0.6,
-                 use_vision = False,
-                 use_function_call = True,
-                 use_json = False):
+class ChatGPTReceiver(ChatReceiver):
+    def __init__(self, api_key=None, base_url=None,
+                 model="gpt-4o-mini",
+                 system_prompt="",
+                 temperature=0.7,
+                 use_vision=False,
+                 use_function_call=True,
+                 use_json=False):
         if api_key is None:
-            api_key = os.getenv("MOONSHOT_API_KEY")
+            api_key = os.getenv("OPENAI_API_KEY")
         if base_url is None:
-            base_url = os.getenv("MOONSHOT_URL")
-            
+            base_url = os.getenv("OPENAI_API_BASE")
+        
         # Store use_json flag for later use
         self.use_json_mode = use_json
         
-        super().__init__(api_key,base_url, "moonshot-v1-32k",
+        super().__init__(api_key, base_url, model,
                          system_prompt=system_prompt,
-                         temperature= temperature,use_json=use_json,use_vision=use_vision,use_function_call=use_function_call)
-
+                         temperature=temperature,
+                         use_json=use_json,
+                         use_vision=use_vision,
+                         use_function_call=use_function_call)
+    
     def make_message(self, message: str) -> list:
+        """Format the messages for the OpenAI API"""
         new_message = [
-            UserMessage(content=self.system_prompt,source="system"),
-            UserMessage(content=message,source="Your_boss")
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": message}
         ]
         return new_message
-
+    
     async def send_message(self, message: str) -> str:
+        """Send a message to the ChatGPT API and get a response"""
         used_message = self.make_message(message)
-        completion = await self.client.create(used_message)
-        return self.handle_message(completion)
-
+        try:
+            completion = await self.client.create(used_message)
+            return self.handle_message(completion)
+        except Exception as e:
+            return f"Error: {str(e)}"
+    
     def handle_message(self, response):
-        # Extract the content from the response
+        """Extract the content from the API response"""
         content = response.content
         
         # If we're in JSON mode, validate the response is proper JSON
@@ -56,6 +62,7 @@ class MoonshotChatReceiver(ChatReceiver):
             except json.JSONDecodeError:
                 # If JSON parsing fails, try to extract JSON from the text
                 # Look for content between curly braces or square brackets
+                import re
                 json_pattern = r'(\[.*\]|\{.*\})'
                 match = re.search(json_pattern, content, re.DOTALL)
                 if match:
@@ -71,8 +78,18 @@ class MoonshotChatReceiver(ChatReceiver):
         return content
 
 
+# Create a default instance with system prompt from the project
 from prompts.system_prompt import STUDY_PLAN_PROMPT
-KimiStaticTesting = MoonshotChatReceiver(system_prompt=STUDY_PLAN_PROMPT)
+ChatGPTDefault = ChatGPTReceiver(system_prompt=STUDY_PLAN_PROMPT)
+
 
 if __name__ == '__main__':
-    pass
+    # Example usage
+    import asyncio
+    
+    async def test_chat():
+        gpt = ChatGPTReceiver(use_json=True)
+        response = await gpt.send_message("Hello, how are you today?")
+        print(response)
+    
+    asyncio.run(test_chat())

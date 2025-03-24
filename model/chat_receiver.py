@@ -40,7 +40,7 @@ class ChatReceiver(ABC):
                 "function_calling": use_function_call,
                 "json_output": use_json,
             },
-            max_tokens=16384
+            max_tokens=8192
         )
 
     # def get_model_param(self,key):

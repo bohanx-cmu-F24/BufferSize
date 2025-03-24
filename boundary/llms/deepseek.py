@@ -10,29 +10,33 @@ import re
 load_dotenv()
 
 
-class MoonshotChatReceiver(ChatReceiver):
-    def __init__(self, api_key = None, base_url = None,
-                 system_prompt = "",
-                 temperature = 0.6,
-                 use_vision = False,
-                 use_function_call = True,
-                 use_json = False):
+class DeepseekChatReceiver(ChatReceiver):
+    def __init__(self, api_key=None, base_url=None,
+                 model="deepseek-chat",
+                 system_prompt="",
+                 temperature=0.6,
+                 use_vision=False,
+                 use_function_call=True,
+                 use_json=False):
         if api_key is None:
-            api_key = os.getenv("MOONSHOT_API_KEY")
+            api_key = os.getenv("DEEPSEEK_API_KEY")
         if base_url is None:
-            base_url = os.getenv("MOONSHOT_URL")
+            base_url = os.getenv("DEEPSEEK_URL")
             
         # Store use_json flag for later use
         self.use_json_mode = use_json
         
-        super().__init__(api_key,base_url, "moonshot-v1-32k",
+        super().__init__(api_key, base_url, model,
                          system_prompt=system_prompt,
-                         temperature= temperature,use_json=use_json,use_vision=use_vision,use_function_call=use_function_call)
+                         temperature=temperature,
+                         use_json=use_json,
+                         use_vision=use_vision,
+                         use_function_call=use_function_call)
 
     def make_message(self, message: str) -> list:
         new_message = [
-            UserMessage(content=self.system_prompt,source="system"),
-            UserMessage(content=message,source="Your_boss")
+            UserMessage(content=self.system_prompt, source="system"),
+            UserMessage(content=message, source="user")
         ]
         return new_message
 
@@ -71,8 +75,18 @@ class MoonshotChatReceiver(ChatReceiver):
         return content
 
 
+# Create a default instance with system prompt from the project
 from prompts.system_prompt import STUDY_PLAN_PROMPT
-KimiStaticTesting = MoonshotChatReceiver(system_prompt=STUDY_PLAN_PROMPT)
+DeepseekDefault = DeepseekChatReceiver(system_prompt=STUDY_PLAN_PROMPT)
+
 
 if __name__ == '__main__':
-    pass
+    # Example usage
+    import asyncio
+    
+    async def test_chat():
+        deepseek = DeepseekChatReceiver()
+        response = await deepseek.send_message("Hello, how are you today?")
+        print(response)
+    
+    asyncio.run(test_chat())
