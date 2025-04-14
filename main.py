@@ -48,6 +48,126 @@ app.register_blueprint(schedule_bp)
 app.register_blueprint(file_bp)
 app.register_blueprint(review_bp)
 
+# Course routes
+@app.route("/courses", methods=["GET"])
+def get_courses():
+    """Get all courses for the current user
+    
+    Returns:
+        JSON response with courses list
+    """
+    try:
+        # Get user information from headers
+        user_id = flask.request.headers.get('x-application-uid')
+        
+        # If no user ID provided, return empty list
+        if not user_id:
+            return flask.jsonify({"courses": []}), 200
+        
+        # Find courses for this user
+        user_courses = courses_collection.find({"user_id": user_id})
+        
+        # Format the response
+        courses_list = []
+        for course in user_courses:
+            courses_list.append({
+                "course_id": course["course_id"],
+                "course_name": course["course_name"]
+            })
+        
+        return flask.jsonify({"courses": courses_list}), 200
+    except Exception as e:
+        print(f"Error getting courses: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return flask.jsonify({"error": f"Failed to get courses: {str(e)}"}), 500
+
+@app.route("/courses", methods=["POST"])
+def add_course():
+    """Add a new course
+    
+    Request body should contain:
+    - course_id: Course ID
+    - course_name: Course name
+    
+    Returns:
+        JSON response with success message
+    """
+    try:
+        data = flask.request.get_json()
+        
+        # Validate request data
+        if not data or not data.get("course_id") or not data.get("course_name"):
+            return flask.jsonify({"error": "Course ID and name are required"}), 400
+        
+        # Get user information from headers
+        user_id = flask.request.headers.get('x-application-uid')
+        username = flask.request.headers.get('x-application-username')
+        
+        # If no user ID provided, return error
+        if not user_id:
+            return flask.jsonify({"error": "Authentication required"}), 401
+        
+        course_id = data["course_id"]
+        course_name = data["course_name"]
+        
+        # Check if course already exists for this user
+        existing_course = courses_collection.find_one({
+            "user_id": user_id,
+            "course_id": course_id
+        })
+        
+        if existing_course:
+            return flask.jsonify({"error": "Course already exists"}), 409
+        
+        # Create new course
+        new_course = {
+            "user_id": user_id,
+            "username": username,
+            "course_id": course_id,
+            "course_name": course_name
+        }
+        
+        result = courses_collection.insert_one(new_course)
+        
+        return flask.jsonify({"message": "Course added successfully"}), 201
+    except Exception as e:
+        print(f"Error adding course: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return flask.jsonify({"error": f"Failed to add course: {str(e)}"}), 500
+
+@app.route("/courses/<course_name>", methods=["DELETE"])
+def delete_course(course_name):
+    """Delete a course by name
+    
+    Returns:
+        JSON response with success message
+    """
+    try:
+        # Get user information from headers
+        user_id = flask.request.headers.get('x-application-uid')
+        
+        # If no user ID provided, return error
+        if not user_id:
+            return flask.jsonify({"error": "Authentication required"}), 401
+        
+        # Delete the course
+        result = courses_collection.delete_one({
+            "user_id": user_id,
+            "course_name": course_name
+        })
+        
+        if result.deleted_count == 0:
+            return flask.jsonify({"error": "Course not found"}), 404
+        
+        return flask.jsonify({"message": "Course deleted successfully"}), 200
+    except Exception as e:
+        print(f"Error deleting course: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return flask.jsonify({"error": f"Failed to delete course: {str(e)}"}), 500
+
 # Authentication routes
 @app.route("/login", methods=["POST"])
 def login():

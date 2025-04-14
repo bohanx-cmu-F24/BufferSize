@@ -22,12 +22,12 @@ class Agent:
                  tools = []):
         self.chatReceiver = chatReceiver
         self.agent = AssistantAgent(
-                    name= name,
+                    name=name,
                     model_client=self.chatReceiver.client,
                     tools=tools,
                     system_message=self.chatReceiver.system_prompt,
-
                 )
+        self.messages = []  # Store message history
 
     async def send_message(self, message, is_debug = False):
         print("Loading...")
@@ -38,6 +38,9 @@ class Agent:
         if is_debug:
             print(response.messages[-1].models_usage)
             print(response.stop_reason)
+
+        # Store all messages from the response
+        self.messages.extend(response.messages)
 
         return response.messages[-1].content
 

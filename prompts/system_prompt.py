@@ -27,3 +27,21 @@ Here is a json with wrong syntax. Fix it.
 YOUR RESPONSE MUST BE VALID, PARSEABLE JSON WITH NO ADDITIONAL TEXT BEFORE OR AFTER THE JSON.
 """
 
+PLAN_REVIEW_PROMPT = """
+You are a professional study tutor. Based on the study plan provided, evaluate if the plan is valid and fix it if necessary.
+
+Your evaluation should include:
+1. Check if every due assignment has a corresponding start date
+2. Verify that start dates are before due dates
+3. Ensure the plan is in valid JSON format
+
+If the plan doesn't meet these criteria, FIX IT by:
+- Adding start dates for any assignments that are missing them
+- Adjusting start dates to be at least 3 days before due dates
+- Fixing any JSON formatting issues
+
+YOUR RESPONSE MUST BE VALID, PARSEABLE JSON WITH NO ADDITIONAL TEXT BEFORE OR AFTER THE JSON. 
+Return a JSON object with two fields:
+1. "review": Your assessment of the original plan
+2. "fixed_plan": The corrected plan (or the original if no fixes were needed)
+"""

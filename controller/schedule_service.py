@@ -7,7 +7,8 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 
 import boundary.llms.moonshot
-from agent.syllabus_agent import syllabus_agent
+from agent.syllabus_agent import make_new_syllabus_agent
+from agent.plan_review_agent import make_new_plan_review_agent
 from model.agent import Agent
 from boundary.llms.moonshot import MoonshotChatReceiver
 import asyncio
@@ -18,7 +19,7 @@ from autogen_agentchat.ui import Console
 from boundary import googleCalendar
 import json
 from prompts import system_prompt
-from agent.plan_agent import planAgent
+from agent.plan_agent import make_new_plan_agent
 import util.file_parser as file_parser
 from util.text_extractor import json_extractor
 from util.json_fixer import fix_json
@@ -150,8 +151,9 @@ async def run_schedule_analysis(make_schedule=False, username=None, force_refres
             # Parse syllabus text as JSON
             syllabus_json = await fix_json(syllabus_text)
             
-            # Generate syllabus analysis
+            # Generate syllabus analysis using a new agent instance
             print(f"Generating new syllabus analysis for user: {username}, course: {course_id}")
+            syllabus_agent = make_new_syllabus_agent()
             syllabus_analysis = await syllabus_agent.send_message(json.dumps(syllabus_json))
             
             # Try to parse the analysis as JSON
@@ -197,17 +199,40 @@ async def run_schedule_analysis(make_schedule=False, username=None, force_refres
         # Parse schedule text as JSON
         schedule_json = await fix_json(schedule_text)
         
-        # Generate schedule
+        # Generate schedule using a new agent instance
         print(f"Generating new schedule for user: {username}, course: {course_id}")
+        plan_agent = make_new_plan_agent()
         schedule_prompt = f"Syllabus Analysis: {json.dumps(syllabus_data)}\n\nSchedule: {json.dumps(schedule_json)}"
-        schedule_result = await planAgent.send_message(schedule_prompt)
+        schedule_result = await plan_agent.send_message(schedule_prompt)
         
-        # Try to parse the schedule as JSON
+        # Review the generated plan using a new plan review agent instance
+        print(f"Reviewing study plan for user: {username}, course: {course_id}")
+        plan_review_agent = make_new_plan_review_agent()
+        review_prompt = f"Review this study plan and provide feedback on its quality, organization, and effectiveness. Suggest specific improvements if needed.\n\nStudy Plan: {schedule_result}"
+        plan_review = await plan_review_agent.send_message(review_prompt)
+        
+        # Add the review to the schedule result
         try:
             schedule_data = await fix_json(schedule_result)
+            review_data = await fix_json(plan_review)
+            
+            # Check if the review contains a fixed plan
+            if isinstance(review_data, dict) and "fixed_plan" in review_data:
+                # Use the fixed plan if available
+                fixed_plan = review_data.get("fixed_plan")
+                if fixed_plan:
+                    print(f"Using fixed plan for user: {username}, course: {course_id}")
+                    schedule_data = fixed_plan
+            
+            # Create a combined result with both the plan and its review
+            combined_result = {
+                "plan": schedule_data,
+                "review": review_data.get("review", review_data) if isinstance(review_data, dict) else review_data
+            }
+            
         except ValueError as e:
-            print(f"Error parsing schedule result: {e}")
-            return json.dumps({"error": "Failed to parse schedule result."})
+            print(f"Error parsing schedule result or review: {e}")
+            return json.dumps({"error": "Failed to parse schedule result or review."})
         
         # Save the schedule to the database if username is provided
         if username:
@@ -221,7 +246,7 @@ async def run_schedule_analysis(make_schedule=False, username=None, force_refres
                 query,
                 {
                     "$set": {
-                        "schedule": schedule_data,
+                        "schedule": combined_result,
                         "updated_at": datetime.datetime.now(timezone.utc)
                     }
                 },
@@ -237,12 +262,12 @@ async def run_schedule_analysis(make_schedule=False, username=None, force_refres
         
         # If make_schedule is requested, create Google Calendar events
         if make_schedule:
-            await make_google_calendar(json.dumps(schedule_data), username, course_id)
+            await make_google_calendar(json.dumps(combined_result), username, course_id)
         
         # Return the schedule
-        if isinstance(schedule_data, str):
-            return schedule_data
-        return json.dumps(schedule_data)
+        if isinstance(combined_result, str):
+            return combined_result
+        return json.dumps(combined_result)
     except ValueError as e:
         print(f"Error parsing schedule text: {e}")
         return json.dumps({"error": "Failed to parse schedule text."})
@@ -264,31 +289,33 @@ async def make_google_calendar(plan: str, username=None, course_id=None):
         
         # Extract events from the plan
         events = []
-        if isinstance(plan_data, list):
-            for day in plan_data:
-                date_str = day.get("date", "")
-                dues = day.get("dues", [])
-                starts = day.get("start", [])
-                
-                # Add due events
-                for due in dues:
-                    events.append({
-                        "summary": f"Due: {due}",
-                        "description": f"Assignment due for {username or 'user'}'s course {course_id or 'unknown'}",
-                        "start_date": date_str,
-                        "end_date": date_str,
-                        "location": ""
-                    })
+        if isinstance(plan_data, dict) and "plan" in plan_data:
+            plan = plan_data["plan"]
+            if isinstance(plan, list):
+                for day in plan:
+                    date_str = day.get("date", "")
+                    dues = day.get("dues", [])
+                    starts = day.get("start", [])
                     
-                # Add start events
-                for start in starts:
-                    events.append({
-                        "summary": f"Start: {start}",
-                        "description": f"Start working on this for {username or 'user'}'s course {course_id or 'unknown'}",
-                        "start_date": date_str,
-                        "end_date": date_str,
-                        "location": ""
-                    })
+                    # Add due events
+                    for due in dues:
+                        events.append({
+                            "summary": f"Due: {due}",
+                            "description": f"Assignment due for {username or 'user'}'s course {course_id or 'unknown'}",
+                            "start_date": date_str,
+                            "end_date": date_str,
+                            "location": ""
+                        })
+                        
+                    # Add start events
+                    for start in starts:
+                        events.append({
+                            "summary": f"Start: {start}",
+                            "description": f"Start working on this for {username or 'user'}'s course {course_id or 'unknown'}",
+                            "start_date": date_str,
+                            "end_date": date_str,
+                            "location": ""
+                        })
         
         # Create Google Calendar events
         if events:
