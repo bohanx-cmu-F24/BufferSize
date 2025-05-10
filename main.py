@@ -1,9 +1,18 @@
 import os
 import flask
+import json
 from flask_cors import CORS
 from pymongo import MongoClient
+from bson import ObjectId
 from dotenv import load_dotenv
 import bcrypt
+
+# Custom JSON encoder for MongoDB ObjectId
+class MongoJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        return super(MongoJSONEncoder, self).default(obj)
 
 # Import route blueprints
 from routes.schedule_routes import schedule_bp
@@ -25,6 +34,9 @@ os.environ['SECRETS_DIR'] = SECRETS_DIR
 
 app = flask.Flask(__name__)
 CORS(app)
+
+# Configure app to use custom JSON encoder
+app.json_encoder = MongoJSONEncoder
 
 # MongoDB Connection
 mongo_uri = os.getenv("MONGO_URI")

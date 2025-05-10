@@ -1,6 +1,6 @@
 import json
 import re
-from agent.json_agent import json_agent
+from agent.json_agent import make_new_json_agent
 from util.text_extractor import json_extractor
 
 
@@ -22,6 +22,8 @@ async def fix_json(json_str):
     if isinstance(json_str, (dict, list)):
         return json_str
     
+    json_agent = make_new_json_agent()
+
     # First try to parse directly
     try:
         return json.loads(json_str)
